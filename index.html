@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NEXUS: Global Swarm Command</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0e14;
+      color: #c0c8d8;
+      font-family: 'Courier New', monospace;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
+    #game-canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      cursor: crosshair;
+    }
+    #hud {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      pointer-events: none;
+      padding: 8px 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: linear-gradient(to bottom, rgba(10, 14, 20, 0.9), transparent);
+      height: 48px;
+      z-index: 10;
+    }
+    #hud-left, #hud-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 13px;
+    }
+    #hud .mission-title {
+      color: #4fc3f7;
+      font-weight: bold;
+      font-size: 14px;
+      letter-spacing: 1px;
+    }
+    #hud .clock {
+      color: #e0e0e0;
+      font-size: 14px;
+    }
+    #time-controls {
+      position: absolute;
+      top: 56px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 4px;
+      pointer-events: auto;
+      z-index: 10;
+    }
+    #time-controls button {
+      background: rgba(20, 28, 40, 0.85);
+      border: 1px solid #2a3a50;
+      color: #8899aa;
+      padding: 5px 14px;
+      cursor: pointer;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      transition: all 0.15s;
+    }
+    #time-controls button:hover {
+      background: rgba(40, 55, 80, 0.9);
+      color: #c0d0e0;
+    }
+    #time-controls button.active {
+      background: rgba(30, 60, 100, 0.9);
+      border-color: #4fc3f7;
+      color: #4fc3f7;
+    }
+    #status-panel {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      pointer-events: none;
+      padding: 8px 12px;
+      background: linear-gradient(to top, rgba(10, 14, 20, 0.9), transparent);
+      height: 72px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      gap: 4px;
+      font-size: 12px;
+      z-index: 10;
+    }
+    #status-panel .label {
+      color: #556677;
+    }
+    #status-panel .value {
+      color: #8899aa;
+    }
+    .mpa-info {
+      display: flex;
+      gap: 24px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <div id="hud">
+    <div id="hud-left">
+      <span class="mission-title">NEXUS // FIRST CONTACT</span>
+    </div>
+    <div id="hud-right">
+      <span class="clock" id="mission-clock">00:00:00 / 02:00:00</span>
+    </div>
+  </div>
+  <div id="time-controls">
+    <button id="btn-pause" title="Pause (Space)">|| PAUSE</button>
+    <button id="btn-1x" title="Normal speed (1)">1x</button>
+    <button id="btn-5x" title="Fast (2)">5x</button>
+    <button id="btn-20x" title="Very fast (3)">20x</button>
+  </div>
+  <div id="status-panel">
+    <div class="mpa-info">
+      <span><span class="label">MPA-1</span> <span class="value" id="mpa-status">Idle</span></span>
+      <span><span class="label">HDG</span> <span class="value" id="mpa-heading">---</span></span>
+      <span><span class="label">SPD</span> <span class="value" id="mpa-speed">--- kts</span></span>
+      <span><span class="label">FUEL</span> <span class="value" id="mpa-fuel">4:00:00</span></span>
+      <span><span class="label">POS</span> <span class="value" id="mpa-position">---.--N ---.--E</span></span>
+    </div>
+    <div>
+      <span class="label">CLICK MAP TO MOVE</span>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
