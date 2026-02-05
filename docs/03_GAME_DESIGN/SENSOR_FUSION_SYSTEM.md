@@ -13,104 +13,194 @@ The core tension: **emitting to see means being seen.** Every sensor decision is
 
 ---
 
-## Detection Confidence Model
+## Area of Uncertainty (AOU) Model
 
-### The Five States
+### Core Concept
 
-Every contact exists in one of five confidence states. Confidence is a float value (0.0 to 1.0) that maps to discrete states:
+Detection in NEXUS is spatial, not abstract. When you detect something, you know where it **was**, not where it **is**. The target keeps moving. Your uncertainty about its current position grows over time.
 
-| State | Confidence Range | Player Display | Engageable? |
-|-------|-----------------|----------------|-------------|
-| **Undetected** | 0.00 | Nothing visible | No |
-| **Anomaly** | 0.01 - 0.25 | Faint blip, dashed circle, "?" icon | No |
-| **Contact** | 0.26 - 0.50 | Solid blip, uncertainty ellipse, domain icon (air/ground/sea) | Only at Aggression > 0.8 |
-| **Track** | 0.51 - 0.75 | Typed icon, heading arrow, speed estimate, "UNK" tag | At Aggression > 0.5 |
-| **Identified** | 0.76 - 1.00 | Full icon, type name, allegiance (hostile/neutral/friendly), capability summary | Standard ROE |
+This is represented by the **Area of Uncertainty (AOU)** — a circle (or ellipse) on the map showing where the target could be right now.
 
-### Confidence Accumulation Formula
+### Datum
 
-Each sensor contributes confidence to a contact over time:
+The **datum** is the last known position — where a sensor detected the target, and when.
 
-```
-confidence_delta = (sensor_power / (distance² × target_signature × environment_factor)) × delta_time
-```
+- Example: "Detected at position 34.5N 127.2E at 14:23:15"
+- This is fact — the target was here at this time
+- Each new sensor contact creates a new datum, resetting the clock
 
-Where:
-- `sensor_power` — intrinsic sensor capability (defined per sensor type, see table below)
-- `distance` — range from sensor to target (meters)
-- `target_signature` — target's cross-section for this sensor type (lower = stealthier, see Signature System)
-- `environment_factor` — weather/terrain modifier (1.0 = clear, higher = worse conditions)
-- `delta_time` — seconds since last update
+### AOU Expansion
 
-**Multiple sensors stack additively.** If Sensor A contributes +0.05/sec and Sensor B contributes +0.03/sec, total accumulation is +0.08/sec.
-
-**Confidence decays** when no sensor has LOS/detection:
-```
-confidence -= decay_rate × delta_time
-```
-- `decay_rate` = 0.05/sec for baseline (contact loses all confidence in 20 seconds without coverage)
-- Reduced by **tracking quality**: if a track was Identified (>0.75), decay rate halves (memory of a confirmed contact persists longer)
-- **Stationary targets** decay at 0.5× rate (they're probably still there)
-- **Fast movers** decay at 2.0× rate (high uncertainty about current position)
-
-### Position Uncertainty
-
-In addition to confidence, each contact has a **position uncertainty radius** that represents how precisely we know where the target is:
+The AOU grows based on how far the target could have moved since the datum:
 
 ```
-uncertainty_radius = base_uncertainty × (1 + time_since_last_update × target_max_speed / 1000)
+aou_radius = sensor_base_error + (time_since_datum × target_max_speed)
 ```
 
 Where:
-- `base_uncertainty` — set by best sensor currently tracking (radar: 50m, EO/IR: 10m, ELINT: 2000m single/200m triangulated, acoustic: 500m)
-- `time_since_last_update` — seconds since last sensor return
-- `target_max_speed` — estimated maximum speed of target type (km/h)
+- `sensor_base_error` — initial position uncertainty from the sensor type (see table below)
+- `time_since_datum` — seconds since the datum was established
+- `target_max_speed` — maximum speed of the target type (meters/second)
 
-Display: uncertainty renders as an ellipse around the contact icon. Size scales with uncertainty. At targeting quality (<100m), ellipse is invisible at most zoom levels.
+**Example:** Submarine max speed = 8 knots (4.1 m/s). Passive sonobuoy bearing intersection gives ±500m error. Last detection 15 minutes ago.
+- `aou_radius = 500 + (900 × 4.1) = 4190m ≈ 2.3nm`
+
+### AOU Shrinking
+
+New sensor data creates a new datum, resetting the AOU:
+
+- Fresh detection → AOU shrinks to that sensor's base error
+- Multiple sensors → AOU is the intersection of their individual constraints
+- MAD pass → Very small AOU (flew directly over target, ±100m)
+
+### Track Quality (Derived from AOU)
+
+Track quality is a direct function of AOU size — no abstract confidence floats:
+
+| State | AOU Radius | Meaning | Display |
+|-------|-----------|---------|---------|
+| **Firm** | < 1nm | Good position fix, recent datum | Solid AOU circle, heading arrow |
+| **Tentative** | 1nm - 10nm | Initial detection or aging track | Dashed AOU circle, "?" icon |
+| **Lost** | > 10nm | Target could be anywhere | Faded circle, no updates |
+
+Track quality transitions happen automatically as AOU expands or new data arrives.
+
+### Identity (Separate Axis)
+
+Identity is about **what** the target is, separate from **where** it is:
+
+| State | Meaning | How Achieved | Display |
+|-------|---------|-------------|---------|
+| **Unknown** | Something detected | Any sensor contact | Generic contact icon |
+| **Classified** | Domain known (sub vs surface) | Sensor type implies domain (sonar → subsurface) | Domain-specific icon |
+| **Identified** | Type known (Kilo-class, hostile) | Close sensor pass OR multi-sensor confirmation | Full icon with classification |
+
+**Key insight:** You can have a Firm track on an Unknown contact (know WHERE, not WHAT). You can have an Identified but Lost track (know WHAT, lost WHERE).
+
+Identity is earned through sustained sensor contact or specific sensor types:
+- Acoustic signature analysis → classifies hull type (requires ~30 seconds sustained contact)
+- MAD confirmation → confirms submarine (binary: submarine or not)
+- Visual/EO/IR at close range → full identification
+- Multiple sensor types confirming same classification → identification bonus
 
 ---
 
-## Sensor Type Specifications (Game Values)
+## Detection Pipeline
 
-### Overview Matrix
+### Step 1: Sensor Range Check
 
-| Sensor Type | Game Range | Sensor Power | Passive? | Emission Signature | Best For |
-|-------------|-----------|-------------|----------|-------------------|----------|
-| Radar (fighter AESA) | 150 km | 200 | NO | 0.8 (high) | Air targets, all-weather |
-| Radar (naval AESA) | 350 km | 500 | NO | 1.0 (very high) | Air/missile defense |
-| Radar (AWACS) | 450 km | 600 | NO | 0.9 (very high) | Wide-area air surveillance |
-| Radar (SAR ground mapping) | 100 km | 150 | NO | 0.6 (medium) | Ground targets through clouds |
-| EO/IR (targeting pod) | 60 km | 100 | YES | 0.0 (none) | Visual identification |
-| IRST | 120 km | 80 | YES | 0.0 (none) | Passive air tracking |
-| ELINT (dedicated) | 400 km | 300 | YES | 0.0 (none) | Detecting emitters |
-| RWR (all platforms) | 2× emitter range | N/A | YES | 0.0 (none) | Threat warning |
-| Passive Sonar (towed) | 100 km | 150 | YES | 0.0 (none) | Submarine detection |
-| Active Sonar | 30 km | 250 | NO | 0.9 (very high underwater) | Submarine localization |
-| Sonobuoy (passive) | 15 km | 50 | YES | 0.0 (none) | Expendable sub detection |
-| Sonobuoy (active) | 8 km | 100 | NO | 0.7 (high underwater) | Sub pinging |
-| Satellite (EO) | Orbital | 80 | YES | 0.0 (none) | Strategic surveillance |
-| Satellite (SAR) | Orbital | 120 | NO | 0.2 (low — space) | All-weather ground mapping |
-| OTH Radar | 3000 km | 50 | NO | 1.0 (enormous) | Strategic early warning |
-| Acoustic (ground) | 3 km | 30 | YES | 0.0 (none) | Ground vehicle detection |
-| Seismic | 1 km | 20 | YES | 0.0 (none) | Heavy vehicle/artillery |
-
-### Sensor Properties Detail
-
-Each sensor instance has these properties:
+Can this sensor detect this target at this range in these conditions?
 
 ```
-SensorComponent {
-    sensor_type: SensorType,        // Enum (Radar, EOIR, ELINT, etc.)
-    max_range: f32,                 // Maximum detection range (meters)
-    sensor_power: f32,              // Detection capability scalar
-    field_of_view: f32,             // Azimuth coverage (degrees, 360 = omnidirectional)
-    elevation_coverage: (f32, f32), // Min/max elevation angles
-    update_interval: f32,           // Seconds between scan updates
-    is_active: bool,                // Currently emitting? (for active sensors)
-    emission_signature: f32,        // How detectable is this sensor when active (0.0-1.0)
-    modes: Vec<SensorMode>,         // Available operating modes
-    current_mode: SensorMode,       // Currently selected mode
-    classification_bonus: f32,      // How fast this sensor progresses confidence (multiplier)
+effective_range = (sensor_power × target_signature) / environment_factor
+detected = (distance_to_target < effective_range)
+```
+
+Where:
+- `sensor_power` — intrinsic sensor capability (see sensor table)
+- `target_signature` — target's cross-section for this sensor type (higher = easier to detect)
+- `environment_factor` — weather/terrain modifier (1.0 = clear, higher = worse)
+
+### Step 2: Detection Event Creates Datum
+
+When a sensor detects a target, it produces spatial data:
+
+| Sensor Type | Output | Base Error |
+|-------------|--------|------------|
+| Passive sonobuoy | Bearing only (no range) | ±3° bearing accuracy |
+| Active sonobuoy | Range + bearing | ±200m position fix |
+| Surface radar | Range + bearing | ±500m position fix |
+| MAD | Fly-over confirmation | ±100m position fix |
+
+**Passive sensors (bearing only):** A single bearing line extends infinitely from the sensor — the target is somewhere along that line. No datum position is created from a single bearing. Two or more bearing lines from different sensors create an intersection — that intersection IS the datum.
+
+### Step 3: Bearing Intersection (Passive Sensors)
+
+Two bearing lines from different positions produce a position fix:
+
+```
+intersection_error = bearing_accuracy / sin(angle_between_bearings)
+```
+
+Where:
+- `bearing_accuracy` — sensor's angular accuracy in meters at the target's range
+- `angle_between_bearings` — angle between the two bearing lines
+
+**Best case (90 intersection):** error ≈ 500m → good datum
+**Worst case (shallow angle < 15):** error ≈ 5000m → poor datum
+**Parallel bearings:** No intersection → display "No Fix" warning to player
+
+**Implementation rule:** If `angle_between_bearings < 10`, reject the fix and warn the player. They need to reposition sonobuoys.
+
+### Step 4: AOU Expansion (Every Tick)
+
+Between detection events, AOU grows at `target_max_speed`:
+```
+aou_radius += target_max_speed × delta_time
+```
+
+This runs every simulation tick. The circle visibly grows on the player's display.
+
+### Step 5: Track Promotion / Demotion
+
+After each tick, re-evaluate track quality:
+```
+if aou_radius < FIRM_THRESHOLD (1nm = 1852m):
+    quality = FIRM
+elif aou_radius < LOST_THRESHOLD (10nm = 18520m):
+    quality = TENTATIVE
+else:
+    quality = LOST
+```
+
+---
+
+## Sensor Type Specifications
+
+### MVP Sensors (Mission 1)
+
+| Sensor | Type | Range | Output | Base Error | Notes |
+|--------|------|-------|--------|------------|-------|
+| **Passive Sonobuoy** | Passive | 15nm | Bearing only | ±3° | Drop in water. Listens. No emission. |
+| **Active Sonobuoy** | Active | 8nm | Range + bearing | ±200m | Pings. Target hears it. |
+| **Surface Radar** | Active | 80nm | Range + bearing | ±500m | Detects periscope/snorkel. Target's RWR detects you. |
+| **MAD** | Passive | 500m | Fly-over confirm | ±100m | Must fly directly over. Confirms submarine. |
+
+### Full Sensor Roster (Post-MVP)
+
+| Sensor Type | Range | Power | Passive? | Emission | Best For |
+|-------------|-------|-------|----------|----------|----------|
+| Radar (fighter AESA) | 150 km | 200 | No | 0.8 | Air targets, all-weather |
+| Radar (naval AESA) | 350 km | 500 | No | 1.0 | Air/missile defense |
+| Radar (AWACS) | 450 km | 600 | No | 0.9 | Wide-area air surveillance |
+| Radar (SAR) | 100 km | 150 | No | 0.6 | Ground targets through clouds |
+| EO/IR (targeting pod) | 60 km | 100 | Yes | 0.0 | Visual identification |
+| IRST | 120 km | 80 | Yes | 0.0 | Passive air tracking |
+| ELINT (dedicated) | 400 km | 300 | Yes | 0.0 | Detecting emitters |
+| RWR (all platforms) | 2x emitter range | N/A | Yes | 0.0 | Threat warning |
+| Passive Sonar (towed) | 100 km | 150 | Yes | 0.0 | Submarine detection |
+| Active Sonar | 30 km | 250 | No | 0.9 | Submarine localization |
+| Sonobuoy (passive) | 15 km | 50 | Yes | 0.0 | Expendable sub detection |
+| Sonobuoy (active) | 8 km | 100 | No | 0.7 | Sub pinging |
+| Satellite (EO) | Orbital | 80 | Yes | 0.0 | Strategic surveillance |
+| Satellite (SAR) | Orbital | 120 | No | 0.2 | All-weather ground mapping |
+| OTH Radar | 3000 km | 50 | No | 1.0 | Strategic early warning |
+| Acoustic (ground) | 3 km | 30 | Yes | 0.0 | Ground vehicle detection |
+| Seismic | 1 km | 20 | Yes | 0.0 | Heavy vehicle/artillery |
+
+### Sensor Properties (Data Schema)
+
+```
+Sensor {
+    type: SensorType           // Enum: PASSIVE_SONOBUOY, ACTIVE_SONOBUOY, RADAR, MAD, etc.
+    maxRange: number           // Maximum detection range (meters)
+    power: number              // Detection capability scalar
+    fieldOfView: number        // Azimuth coverage (degrees, 360 = omnidirectional)
+    isActive: boolean          // Currently emitting?
+    emissionSignature: number  // How detectable when active (0.0-1.0)
+    baseError: number          // Position accuracy (meters) or bearing accuracy (degrees)
+    outputType: 'position' | 'bearing'  // What detection data this sensor produces
+    updateInterval: number     // Seconds between scan updates
 }
 ```
 
@@ -120,45 +210,41 @@ SensorComponent {
 
 ### The 2x Rule (Core Mechanic)
 
-**Any active sensor (radar, active sonar, jammer) can be detected by passive sensors at approximately 2× its own detection range.**
+**Any active sensor can be detected by passive sensors at approximately 2x its own detection range.**
 
-Implementation:
 ```
-elint_detection_range = emitter_range × 2.0 × (emitter_power / baseline_power)
+elint_detection_range = emitter_range × 2.0
 ```
-
-Where `baseline_power` is calibrated so that a standard fighter radar (150 km range) is detectable by ELINT at ~300 km.
 
 This means:
-- Fighter radar (150 km) → detectable at 300 km
+- Fighter radar (150 km range) → detectable at 300 km by ELINT
 - Naval radar (350 km) → detectable at 700 km
-- AWACS (450 km) → detectable at 900 km
-- OTH radar (3000 km) → detectable globally (it's a fixed installation, everyone knows where it is)
-- Active sonar (30 km) → detectable at 60 km (underwater acoustic propagation)
+- Active sonar (30 km) → detectable at 60 km underwater
+- Active sonobuoy (8nm) → audible at 16nm to submarine
+
+**This is the foundation of every sensor decision.** Emit to see, but know you're being seen at double the range.
 
 ### EMCON (Emission Control) Profiles
 
-Each swarm has an EMCON setting that controls emission behavior:
+Each unit/swarm has an EMCON setting:
 
 | EMCON Level | Behavior | Tradeoff |
 |-------------|----------|----------|
-| **STRICT** | All active sensors OFF. Passive only. No radar, no active sonar, no IFF interrogation. Radio comms minimized. | Minimum signature. Maximum stealth. Severely degraded awareness — only passive sensors (ELINT, IRST, passive sonar, acoustic). |
-| **LIMITED** | Defensive sensors only. RWR active, IFF interrogation on incoming contacts only. No search radar. | Low signature. Good threat warning. Cannot detect new contacts with own sensors — relies on network data. |
-| **NORMAL** | Search radar active on schedule (intermittent sweeps). Active sonar on demand. Standard comms. | Moderate signature. Good situational awareness. Detectable by ELINT when emitting. |
-| **AGGRESSIVE** | All sensors active continuously. Maximum emission power. Continuous radar sweeps. | Maximum awareness. Maximum signature. The brightest target on every ELINT receiver within 2× range. |
+| **STRICT** | All active sensors OFF. Passive only. | Max stealth. Severely degraded awareness. |
+| **LIMITED** | Defensive sensors only. No search emissions. | Low signature. Relies on network data. |
+| **NORMAL** | Search radar intermittent. Active sonar on demand. | Moderate signature. Good awareness. |
+| **AGGRESSIVE** | All sensors active continuously. | Max awareness. Max signature. Brightest target in theater. |
 
-Player sets EMCON per swarm. Can be changed at any time. Switching from STRICT to AGGRESSIVE takes 15 seconds (sensor warmup time).
+EMCON switching takes 15 seconds (sensor warmup).
 
-### Anti-Radiation Weapons (ARM)
+### Anti-Radiation Weapons (Post-MVP)
 
-Platforms equipped with ARMs can target active emitters:
-
+ARMs home on active emitters:
 ```
-arm_lock_range = emitter_detection_range × 0.8  // Can lock from slightly less than ELINT range
-arm_accuracy = proportional to emitter duty cycle (continuous emission = high accuracy)
+arm_lock_range = emitter_detection_range × 0.8
 ```
 
-ARMs create the hard counter to aggressive emission: keep your radar on and a HARM-equivalent will find you. The defense: emit intermittently (reduces ARM lock quality), use decoy emitters, or shut down and relocate.
+Keep your radar on → eat a HARM. The counter: emit intermittently, use decoys, or shut down and relocate.
 
 ---
 
@@ -166,46 +252,43 @@ ARMs create the hard counter to aggressive emission: keep your radar on and a HA
 
 ### Track Correlation
 
-When two or more sensors detect the same physical target, the system must recognize them as one contact, not two. Track correlation logic:
+When two sensors detect the same target, the system merges them into one track:
 
 ```
-correlation_score = f(position_overlap, velocity_similarity, time_proximity, classification_match)
-
-if correlation_score > CORRELATION_THRESHOLD (0.7):
-    merge into single track
-    combined_confidence = max(conf_A, conf_B) + min(conf_A, conf_B) × 0.5
-    combined_uncertainty = min(uncertainty_A, uncertainty_B) × 0.7
+correlation_check:
+    if position_overlap AND velocity_similar AND time_recent:
+        merge into single track
+        combined_aou = intersection of individual AOUs
 ```
 
-This means: the best sensor sets the floor, and the second sensor provides a bonus. Two mediocre sensors together are better than one.
+The intersection of two AOUs is always smaller than either alone. This is the mechanical incentive to use multiple sensors on the same target.
 
-### Sensor Type Bonuses for Classification
+### Multi-Sensor Identification Bonus
 
-Different sensors are better at different classification tasks:
+Different sensor types contribute to identification at different rates:
 
-| Sensor | Detection Speed | Classification Speed | Identification Speed |
-|--------|----------------|---------------------|---------------------|
-| Radar | Fast (range + velocity quickly) | Medium (RCS estimate, Doppler signature) | Slow (needs other sensors) |
-| EO/IR | Slow (short range) | Fast (visual shape recognition) | Very Fast (can visually ID) |
-| ELINT | Fast (if target emitting) | Very Fast (emission signature = type) | Fast (specific emitter = specific platform) |
-| IRST | Medium | Slow (heat blob, limited detail) | Slow (needs close range) |
-| Acoustic | Medium (submarine context) | Fast (acoustic signature databases) | Fast (propeller cavitation = hull type) |
+| Sensor | Classification Speed | Identification Speed |
+|--------|---------------------|---------------------|
+| Radar | Medium (RCS estimate) | Slow (needs other sensors) |
+| EO/IR | Fast (visual shape) | Very Fast (visual ID) |
+| ELINT | Very Fast (emission = type) | Fast (specific emitter = platform) |
+| Acoustic | Fast (signature databases) | Fast (propeller cavitation = hull) |
+| MAD | N/A (confirms submarine) | N/A (domain only) |
 
-### The Fusion Bonus
+### Fusion Bonus
 
-When multiple sensor TYPES (not just multiple sensors of the same type) contribute to a track, a fusion bonus applies:
+When multiple sensor **types** (not multiples of the same type) contribute to a track:
 
 ```
-fusion_multiplier = 1.0 + (unique_sensor_types_contributing - 1) × 0.3
+identification_time_multiplier = 1.0 / (1.0 + (unique_sensor_types - 1) × 0.3)
 ```
 
-So:
-- 1 sensor type: 1.0× confidence accumulation
-- 2 sensor types: 1.3× (e.g., radar + ELINT)
-- 3 sensor types: 1.6× (e.g., radar + ELINT + EO/IR)
-- 4+ sensor types: 1.9× (diminishing returns cap at 2.0×)
+- 1 sensor type: 1.0x (baseline identification time)
+- 2 sensor types: 0.77x (30% faster)
+- 3 sensor types: 0.62x (38% faster)
+- 4+ sensor types: 0.53x (cap)
 
-**This is the mechanical incentive to layer different sensor types.** Stacking 5 radars on the same area gives 5× detection power but only 1.0× fusion bonus. Using 1 radar + 1 ELINT + 1 EO/IR + 1 acoustic gives less raw power but 1.9× fusion bonus, AND each sensor covers the others' weaknesses.
+**This rewards sensor diversity.** Stacking 5 sonobuoys gives 5 bearing lines. Adding 1 MAD pass on top gives a fusion bonus AND confirms submarine classification instantly.
 
 ---
 
@@ -213,116 +296,100 @@ So:
 
 ### Shared Picture
 
-All friendly sensor data feeds into a Common Operating Picture (COP) — but with latency and degradation based on network quality:
+All friendly sensor data feeds into a Common Operating Picture (COP):
 
 ```
-NetworkComponent {
-    bandwidth: f32,          // Data throughput (affects track update rate shared to network)
-    latency: f32,            // Seconds of delay for shared data
-    link_quality: f32,       // 0.0-1.0, affects whether data gets through
-    relay_chain_length: u8,  // How many hops to reach C2. More hops = more latency + degradation
+NetworkLink {
+    bandwidth: number       // Data throughput
+    latency: number         // Seconds of delay
+    quality: number         // 0.0-1.0, packet delivery reliability
 }
 ```
 
-**Network degradation effects:**
-- `link_quality < 0.5` → shared tracks update at half rate
-- `link_quality < 0.2` → unit is effectively offline (uses only own sensors)
-- `latency > 5 seconds` → shared track positions have additional uncertainty from stale data
-- Relay chain > 3 hops → 10% chance per tick of packet loss (missed updates)
+**Degradation effects:**
+- `quality < 0.5` → shared tracks update at half rate
+- `quality < 0.2` → unit is effectively offline (own sensors only)
+- `latency > 5s` → shared track positions have additional AOU expansion from stale data
+- Relay chain > 3 hops → 10% chance per tick of missed updates
 
-### Network as Target
+### Network as Target (Post-MVP)
 
-Destroying or jamming network nodes degrades the entire force's sensor picture:
-- Destroy AWACS → all units lose its radar contribution to fusion
-- Jam datalinks → units can still see with own sensors but can't share
-- Destroy satellite relay → units in that coverage zone lose over-horizon communication
-
-**This creates the counter-NCW gameplay:** instead of fighting the enemy's weapons, fight their network. Blind them. Isolate them. Make their swarms deaf and dumb.
+Destroying or jamming network nodes degrades the entire force's picture:
+- Destroy AWACS → all units lose its radar contribution
+- Jam datalinks → units see with own sensors but can't share
+- Destroy satellite relay → units in that zone lose over-horizon comms
 
 ---
 
-## Signature System (Target Properties)
+## Signature System
 
-Each platform has signatures for each sensor type:
+Each platform has signatures per sensor type:
 
 ```
-SignatureComponent {
-    radar_cross_section: f32,    // 0.001 (stealth) to 10000 (carrier). Affects radar detection range.
-    infrared_signature: f32,     // 0.1 (electric, cold) to 5.0 (afterburner). Affects IR detection.
-    acoustic_signature: f32,     // 0.1 (silent running sub) to 3.0 (surface ship). Affects sonar.
-    visual_signature: f32,       // 0.1 (small drone) to 5.0 (carrier). Affects EO detection.
-    electromagnetic_signature: f32, // 0.0 (EMCON strict) to 2.0 (Aegis radiating). ELINT detection.
+SignatureProfile {
+    acoustic: number        // 0.1 (silent running) to 3.0 (surface ship)
+    radar: number           // 0.001 (stealth) to 10000 (carrier)
+    infrared: number        // 0.1 (electric) to 5.0 (afterburner)
+    visual: number          // 0.1 (small drone) to 5.0 (carrier)
+    electromagnetic: number // 0.0 (EMCON strict) to 2.0 (radiating)
 }
 ```
 
-Signatures are **not fixed** — they change based on platform state:
-- Aircraft in afterburner: IR signature × 3
-- Ship at flank speed: acoustic signature × 2
-- Any platform with radar active: EM signature = radar emission level
-- Submarine at periscope depth: radar cross section increases dramatically
-- Ground vehicle engine off: IR and acoustic signatures drop to 0.2× baseline
+Signatures change based on state:
+- Submarine snorkeling: acoustic × 3, radar cross-section increases
+- Submarine silent running: acoustic × 0.3
+- Aircraft afterburner: infrared × 3
+- Any platform radar active: electromagnetic = emission level
 
 ---
 
-## Satellite Mechanics
+## Edge Cases
 
-Satellites are unique because they're **periodic, not persistent:**
+### Parallel Bearing Lines
+If two passive sonobuoy bearings are nearly parallel (< 10 angle), no position fix is possible. Display "Insufficient Angle — Reposition Sensors" warning.
 
-```
-SatelliteComponent {
-    orbit_altitude: f32,         // km (LEO: 200-2000, MEO: 2000-35786, GEO: 35786)
-    orbital_period: f32,         // seconds (LEO ~90 min, GEO = stationary)
-    swath_width: f32,            // km (imaging width per pass)
-    revisit_interval: f32,       // seconds between passes over same point
-    sensor_type: SensorType,     // EO, SAR, IR, SIGINT
-    tasking_delay: f32,          // seconds from command to execution (retask time)
-    downlink_delay: f32,         // seconds from image capture to data availability
-}
-```
+### AOU Exceeds Play Area
+When `aou_radius > play_area_diameter`, track is automatically set to Lost. The target could be anywhere.
 
-**Gameplay implications:**
-- LEO imaging satellites pass over a point **~2 times per day** with a 15-20 km imaging swath
-- Player must predict where targets will be and task satellite passes in advance
-- GEO satellites provide continuous coverage of one hemisphere but at lower resolution
-- Satellite passes create **windows of opportunity** — the enemy knows when your satellite is overhead and can hide or emit differently
-- Satellites can be destroyed (ASAT weapons) or dazzled (laser weapons)
+### Submarine Exits Play Area
+If the submarine crosses the boundary while tracked, the track persists but AOU continues expanding. If the submarine crosses while Lost, it's gone — mission failure path.
 
-**This creates a planning layer:** satellite tasking is a strategic decision made minutes to hours in advance, unlike tactical sensors that respond in real-time.
+### All Sonobuoys Expended
+Player must rely on MPA's radar and MAD. Radar requires snorkel/periscope (intermittent). MAD requires fly-over (need approximate position). This is a recoverable but difficult state.
+
+### Target Stationary
+AOU still expands (player doesn't know the target stopped), but at the target's max speed. The target's actual position remains within the AOU circle.
 
 ---
 
 ## MVP Implementation Path
 
-### Phase 1: Basic Detection (Weeks 1-4)
-- Binary detection within range (not probabilistic)
-- Single sensor type: radar with fixed range
-- Simple fog of war: visible or not
-- **Goal:** Units appear/disappear based on radar coverage circles
+### Milestone 1: Basic Detection
+- Passive sonobuoys: deploy, detect, produce bearing lines
+- Bearing intersection: two bearings → datum + AOU
+- AOU expansion over time
+- Track quality: Tentative / Firm / Lost
 
-### Phase 2: Confidence Model (Weeks 5-8)
-- Probabilistic detection with 5 confidence states
-- Confidence accumulation and decay
-- Two sensor types: radar (active) + EO/IR (passive)
-- Position uncertainty ellipses
-- **Goal:** Contacts build from anomaly to identified over time
+### Milestone 2: Full Sensor Suite
+- Active sonobuoys: ping → position fix
+- Surface radar: detects snorkel/periscope
+- MAD: fly-over confirmation
+- Submarine signature states
 
-### Phase 3: Emission Economy (Weeks 9-12)
-- ELINT detection of active emitters (the 2x rule)
-- EMCON profiles per swarm
-- RWR on all units
-- Three+ sensor types: radar, EO/IR, ELINT
-- **Goal:** The core "emit to see = be seen" loop is functional
+### Milestone 3: Complete Mission
+- Identity states: Unknown → Classified → Identified
+- Win/lose conditions based on track quality + identity
+- Full sensor tradeoffs (passive vs active)
 
-### Phase 4: Full Fusion (Weeks 13-16)
+### Milestone 4: Emission Economy (Post-validation)
+- 2x rule implementation
+- EMCON profiles
+- Submarine reacts to active sensors
+- RWR system
+
+### Milestone 5+: Full Fusion
 - Track correlation across sensor types
 - Fusion bonus for multi-sensor coverage
-- Network/datalink with latency and degradation
-- All sensor types implemented
+- Network/datalink with latency
 - Weather/terrain effects on sensors
-- **Goal:** Complete sensor fusion system as described in this spec
-
-### Phase 5: Iteration & Balance (Ongoing)
-- Satellite mechanics
-- Anti-radiation weapons
-- Advanced EW (deception jamming, GPS spoofing)
-- Balance passes based on playtesting
+- All sensor types from full roster
