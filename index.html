@@ -3,138 +3,1326 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NEXUS: Global Swarm Command</title>
+  <title>NEXUS: Swarm Commander</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      background: #0a0e14;
-      color: #c0c8d8;
-      font-family: 'Courier New', monospace;
+      background: #111418;
+      color: #ABB3BF;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", sans-serif;
       overflow: hidden;
       width: 100vw;
       height: 100vh;
     }
-    #game-canvas {
-      display: block;
+    #game-container {
+      position: relative;
       width: 100vw;
       height: 100vh;
-      cursor: crosshair;
+      overflow: hidden;
     }
+    /* When intel dashboard is open, shift the game area right */
+    #game-container.intel-open #map,
+    #game-container.intel-open #game-canvas {
+      left: 300px;
+      width: calc(100vw - 300px);
+    }
+    #map {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+    }
+    #game-canvas {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      cursor: default;
+    }
+
+    /* --- Top bar --- */
     #hud {
       position: absolute;
       top: 0;
       left: 0;
       right: 0;
       pointer-events: none;
-      padding: 8px 12px;
+      padding: 0 12px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      background: linear-gradient(to bottom, rgba(10, 14, 20, 0.9), transparent);
-      height: 48px;
+      background: #1C2127;
+      border-bottom: 1px solid #383E47;
+      height: 36px;
       z-index: 10;
+      font-size: 13px;
     }
     #hud-left, #hud-right {
       display: flex;
       align-items: center;
       gap: 16px;
+    }
+    .mission-title {
+      color: #C5CBD3;
+      font-weight: 600;
       font-size: 13px;
+      letter-spacing: 0.5px;
     }
-    #hud .mission-title {
-      color: #4fc3f7;
-      font-weight: bold;
-      font-size: 14px;
-      letter-spacing: 1px;
-    }
-    #hud .clock {
-      color: #e0e0e0;
-      font-size: 14px;
-    }
+    .unit-count { font-size: 12px; }
+    .unit-count .blue { color: #4C90F0; }
+    .unit-count .red { color: #E76A6E; }
+    .unit-count .label { color: #5F6B7C; }
+
+    /* --- Time controls (centered in top bar) --- */
     #time-controls {
       position: absolute;
-      top: 56px;
+      top: 0;
       left: 50%;
       transform: translateX(-50%);
       display: flex;
-      gap: 4px;
+      gap: 1px;
       pointer-events: auto;
-      z-index: 10;
+      z-index: 11;
+      height: 36px;
+      align-items: center;
     }
     #time-controls button {
-      background: rgba(20, 28, 40, 0.85);
-      border: 1px solid #2a3a50;
-      color: #8899aa;
-      padding: 5px 14px;
+      background: #252A31;
+      border: 1px solid #383E47;
+      color: #8F99A8;
+      padding: 4px 12px;
       cursor: pointer;
-      font-family: 'Courier New', monospace;
-      font-size: 12px;
-      transition: all 0.15s;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 500;
+      transition: all 0.1s;
     }
     #time-controls button:hover {
-      background: rgba(40, 55, 80, 0.9);
-      color: #c0d0e0;
+      background: #2F343C;
+      color: #C5CBD3;
     }
     #time-controls button.active {
-      background: rgba(30, 60, 100, 0.9);
-      border-color: #4fc3f7;
-      color: #4fc3f7;
+      background: #2D72D2;
+      border-color: #4C90F0;
+      color: #fff;
     }
+
+    /* --- Bottom panel (minimal controls hint only) --- */
     #status-panel {
       position: absolute;
       bottom: 0;
-      left: 0;
+      left: 300px;
       right: 0;
       pointer-events: none;
-      padding: 8px 12px;
-      background: linear-gradient(to top, rgba(10, 14, 20, 0.9), transparent);
-      height: 72px;
-      display: flex;
-      flex-direction: column;
-      justify-content: flex-end;
-      gap: 4px;
       font-size: 12px;
       z-index: 10;
     }
-    #status-panel .label {
-      color: #556677;
+    .label { color: #5F6B7C; font-size: 11px; }
+    .value { color: #ABB3BF; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
     }
-    #status-panel .value {
-      color: #8899aa;
+
+    .hud-btn {
+      background: #252A31;
+      border: 1px solid #383E47;
+      color: #8F99A8;
+      padding: 2px 8px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 10px;
+      font-weight: 500;
+      transition: all 0.1s;
+      pointer-events: auto;
     }
-    .mpa-info {
+    .hud-btn:hover {
+      background: #2F343C;
+      color: #C5CBD3;
+    }
+    .hud-btn.active {
+      background: #2D72D2;
+      border-color: #4C90F0;
+      color: #fff;
+    }
+
+    /* --- Unit info panel (top-left, offset past intel dashboard) --- */
+    #unit-info-panel {
+      position: absolute;
+      top: 44px;
+      left: 308px;
+      width: 220px;
+      background: #1C2127;
+      border: 1px solid #383E47;
+      z-index: 10;
+      pointer-events: none;
+      font-size: 11px;
+      display: none;
+    }
+    #unit-info-panel.visible { display: block; }
+    .unit-info-header {
+      padding: 5px 10px;
+      border-bottom: 1px solid #383E47;
+      color: #C5CBD3;
+      font-weight: 600;
+      font-size: 11px;
       display: flex;
-      gap: 24px;
+      justify-content: space-between;
+      align-items: center;
     }
+    .unit-info-header .unit-state {
+      font-size: 9px;
+      font-weight: 500;
+    }
+    .unit-state.idle { color: #5F6B7C; }
+    .unit-state.transit { color: #4C90F0; }
+    .unit-state.attacking { color: #E76A6E; }
+    .unit-state.orbiting { color: #32A467; }
+    .unit-state.destroyed { color: #404854; }
+    .unit-info-body {
+      padding: 6px 10px;
+    }
+    .unit-stat-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 2px 0;
+      font-size: 10px;
+    }
+    .unit-stat-label {
+      color: #5F6B7C;
+    }
+    .unit-stat-value {
+      color: #ABB3BF;
+      font-weight: 500;
+    }
+    .unit-stat-value.blue { color: #4C90F0; }
+    .unit-stat-value.amber { color: #EC9A3C; }
+    .unit-stat-value.red { color: #E76A6E; }
+    .unit-info-divider {
+      border-top: 1px solid #2F343C;
+      margin: 4px 0;
+    }
+    .unit-info-multi {
+      padding: 6px 10px;
+    }
+    .unit-info-multi-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 1px 0;
+      font-size: 10px;
+    }
+    .unit-type-label {
+      color: #8F99A8;
+    }
+    .unit-type-count {
+      color: #C5CBD3;
+      font-weight: 600;
+    }
+
+    /* --- Mission Planner Panel (right side) --- */
+    #planner-panel {
+      position: absolute;
+      top: 44px;
+      right: 8px;
+      width: 300px;
+      max-height: calc(100vh - 56px);
+      overflow-y: auto;
+      background: #1C2127;
+      border: 1px solid #383E47;
+      z-index: 10;
+      pointer-events: auto;
+      font-size: 11px;
+      display: none;
+    }
+    #planner-panel.visible { display: block; }
+
+    .planner-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px;
+      border-bottom: 1px solid #383E47;
+      color: #C5CBD3;
+      font-weight: 600;
+      font-size: 11px;
+    }
+    .planner-header button {
+      background: none;
+      border: none;
+      color: #5F6B7C;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+    }
+    .planner-header button:hover { color: #C5CBD3; }
+
+    .planner-steps {
+      display: flex;
+      gap: 4px;
+      padding: 6px 10px;
+      border-bottom: 1px solid #2F343C;
+    }
+    .step-dot {
+      width: 24px;
+      height: 4px;
+      background: #383E47;
+      border-radius: 2px;
+      flex: 1;
+    }
+    .step-dot.active { background: #4C90F0; }
+    .step-dot.done { background: #32A467; }
+
+    .planner-body {
+      padding: 8px 10px;
+    }
+    .planner-section {
+      margin-bottom: 8px;
+    }
+    .planner-section-label {
+      color: #5F6B7C;
+      font-size: 10px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      letter-spacing: 0.5px;
+    }
+
+    /* Asset group cards (step 1) */
+    .asset-group {
+      background: #252A31;
+      border: 1px solid #383E47;
+      padding: 6px 8px;
+      margin-bottom: 4px;
+    }
+    .asset-group-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #C5CBD3;
+      font-weight: 500;
+    }
+    .asset-group-meta {
+      color: #5F6B7C;
+      font-size: 9px;
+      margin-top: 2px;
+    }
+    .asset-group-counter {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .asset-counter-btn {
+      background: #383E47;
+      border: none;
+      color: #ABB3BF;
+      width: 20px;
+      height: 20px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .asset-counter-btn:hover { background: #4C90F0; color: #fff; }
+    .asset-counter-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    .asset-counter-btn:disabled:hover { background: #383E47; color: #ABB3BF; }
+    .asset-count-display {
+      color: #4C90F0;
+      font-weight: 600;
+      min-width: 20px;
+      text-align: center;
+    }
+    .asset-commitment-summary {
+      color: #8F99A8;
+      font-size: 10px;
+      padding: 4px 0;
+      border-top: 1px solid #2F343C;
+      margin-top: 4px;
+    }
+
+    /* Mission type cards (step 2) */
+    .mission-type-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+    }
+    .mission-type-card {
+      background: #252A31;
+      border: 1px solid #383E47;
+      padding: 6px 8px;
+      cursor: pointer;
+      transition: all 0.1s;
+    }
+    .mission-type-card:hover {
+      background: #2F343C;
+      border-color: #4C90F0;
+    }
+    .mission-type-card.selected {
+      background: #2D72D2;
+      border-color: #4C90F0;
+      color: #fff;
+    }
+    .mission-type-card.locked {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .mission-type-card.locked:hover {
+      background: #252A31;
+      border-color: #383E47;
+    }
+    .mission-type-name {
+      font-weight: 600;
+      font-size: 10px;
+    }
+    .mission-type-desc {
+      font-size: 9px;
+      color: #8F99A8;
+      margin-top: 2px;
+    }
+    .mission-type-card.selected .mission-type-desc { color: rgba(255,255,255,0.7); }
+    .mission-type-hint {
+      font-size: 8px;
+      color: #E76A6E;
+      margin-top: 2px;
+    }
+
+    /* Approach cards (step 3) */
+    .approach-card {
+      background: #252A31;
+      border: 1px solid #383E47;
+      padding: 8px;
+      margin-bottom: 4px;
+      cursor: pointer;
+      transition: all 0.1s;
+    }
+    .approach-card:hover {
+      background: #2F343C;
+      border-color: #4C90F0;
+    }
+    .approach-card.selected {
+      border-color: #4C90F0;
+      background: #1a2a40;
+    }
+    .approach-name {
+      color: #C5CBD3;
+      font-weight: 600;
+      font-size: 11px;
+    }
+    .approach-desc {
+      color: #8F99A8;
+      font-size: 9px;
+      margin-top: 2px;
+      line-height: 1.4;
+    }
+    .tradeoff-bars {
+      margin-top: 6px;
+      display: grid;
+      grid-template-columns: 50px 1fr;
+      gap: 2px 6px;
+      align-items: center;
+    }
+    .tradeoff-label {
+      color: #5F6B7C;
+      font-size: 8px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .tradeoff-bar {
+      display: flex;
+      gap: 1px;
+    }
+    .tradeoff-pip {
+      width: 100%;
+      height: 4px;
+      background: #383E47;
+      flex: 1;
+    }
+    .tradeoff-pip.filled { background: #4C90F0; }
+    .tradeoff-pip.filled.high { background: #E76A6E; }
+    .tradeoff-pip.filled.low { background: #32A467; }
+
+    /* Role assignments (step 3/4) */
+    .role-assignment {
+      background: #252A31;
+      border: 1px solid #383E47;
+      padding: 6px 8px;
+      margin-bottom: 4px;
+    }
+    .role-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .role-name {
+      color: #C5CBD3;
+      font-weight: 600;
+      font-size: 10px;
+    }
+    .role-count {
+      color: #4C90F0;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .role-desc {
+      color: #5F6B7C;
+      font-size: 9px;
+      margin-top: 2px;
+    }
+
+    /* Fine-tune params (step 4) */
+    .param-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-bottom: 4px;
+    }
+    .param-label {
+      color: #5F6B7C;
+      font-size: 10px;
+      font-weight: 600;
+      width: 38px;
+      flex-shrink: 0;
+    }
+    .param-btns {
+      display: flex;
+      gap: 3px;
+      flex: 1;
+    }
+    .param-btn {
+      flex: 1;
+      background: #252A31;
+      border: 1px solid #383E47;
+      color: #8F99A8;
+      padding: 3px 2px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 9px;
+      font-weight: 500;
+      text-align: center;
+      transition: all 0.1s;
+    }
+    .param-btn:hover {
+      background: #2F343C;
+      color: #C5CBD3;
+    }
+    .param-btn.selected {
+      background: #2D72D2;
+      border-color: #4C90F0;
+      color: #fff;
+    }
+    /* ROE color-coded selected states */
+    .param-btn.roe-hold.selected {
+      background: #404854;
+      border-color: #5F6B7C;
+      color: #ABB3BF;
+    }
+    .param-btn.roe-tight.selected {
+      background: #7B5B00;
+      border-color: #EC9A3C;
+      color: #EC9A3C;
+    }
+    .param-btn.roe-free.selected {
+      background: #6C2022;
+      border-color: #E76A6E;
+      color: #E76A6E;
+    }
+    /* Radar mode buttons */
+    .param-btn.radar-active.selected {
+      background: #2D72D2;
+      border-color: #4C90F0;
+      color: #fff;
+    }
+    .param-btn.radar-passive.selected {
+      background: #1C4A2E;
+      border-color: #32A467;
+      color: #32A467;
+    }
+
+    /* Briefing summary */
+    .briefing-summary {
+      margin-top: 6px;
+      padding: 5px 8px;
+      border-left: 2px solid #4C90F0;
+      background: rgba(76, 144, 240, 0.04);
+      font-size: 9px;
+      font-style: italic;
+      color: #8F99A8;
+      line-height: 1.5;
+    }
+
+    /* Planner nav buttons */
+    .planner-nav {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #2F343C;
+      margin-top: 8px;
+    }
+    .planner-nav-btn {
+      flex: 1;
+      background: #252A31;
+      border: 1px solid #383E47;
+      color: #8F99A8;
+      padding: 6px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      text-align: center;
+      transition: all 0.1s;
+    }
+    .planner-nav-btn:hover { background: #2F343C; color: #C5CBD3; }
+    .planner-nav-btn.primary {
+      background: #2D72D2;
+      border-color: #4C90F0;
+      color: #fff;
+    }
+    .planner-nav-btn.primary:hover { background: #4C90F0; }
+    .planner-nav-btn.launch {
+      background: #1C6E42;
+      border-color: #32A467;
+      color: #fff;
+    }
+    .planner-nav-btn.launch:hover { background: #32A467; }
+    .planner-nav-btn:disabled {
+      background: #252A31;
+      border-color: #383E47;
+      color: #5F6B7C;
+      cursor: not-allowed;
+    }
+    .planner-nav-btn:disabled:hover { background: #252A31; }
+
+    /* Target prompt */
+    .target-prompt {
+      color: #EC9A3C;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 6px 0;
+      animation: pulse 1.2s infinite;
+    }
+
+    /* --- Queue Panel (right side, compact, shown during gameplay) --- */
+    #queue-panel {
+      position: absolute;
+      top: 44px;
+      right: 8px;
+      width: 240px;
+      max-height: calc(100vh - 56px);
+      overflow-y: auto;
+      background: #1C2127;
+      border: 1px solid #383E47;
+      z-index: 10;
+      pointer-events: auto;
+      font-size: 11px;
+      display: none;
+    }
+    #queue-panel.visible { display: block; }
+
+    .queue-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px;
+      border-bottom: 1px solid #383E47;
+      color: #C5CBD3;
+      font-weight: 600;
+      font-size: 11px;
+    }
+    .queue-header button {
+      background: none;
+      border: none;
+      color: #5F6B7C;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+    }
+    .queue-header button:hover { color: #C5CBD3; }
+
+    .queue-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-bottom: 1px solid #2F343C;
+      font-size: 10px;
+    }
+    .queue-item:last-child { border-bottom: none; }
+    .queue-item-number {
+      color: #5F6B7C;
+      font-weight: 600;
+      min-width: 14px;
+    }
+    .queue-item-type {
+      color: #ABB3BF;
+      flex: 1;
+    }
+    .queue-item-status {
+      font-size: 9px;
+      font-weight: 600;
+      padding: 1px 4px;
+    }
+    .queue-item-status.active { color: #4C90F0; }
+    .queue-item-status.queued { color: #5F6B7C; }
+    .queue-item-status.complete { color: #32A467; }
+
+    /* ROE badges */
+    .roe-badge {
+      font-size: 8px;
+      font-weight: 600;
+      padding: 0 3px;
+      border-radius: 2px;
+    }
+    .roe-badge.hold { background: #404854; color: #8F99A8; }
+    .roe-badge.tight { background: #7B5B00; color: #EC9A3C; }
+    .roe-badge.free { background: #6C2022; color: #E76A6E; }
+
+    /* Planner mode indicator */
+    #planner-mode-indicator {
+      color: #4C90F0;
+      font-weight: 600;
+      animation: pulse 0.8s infinite;
+      display: none;
+    }
+
+    /* --- Controls hint --- */
+    .controls-hint {
+      color: #404854;
+      font-size: 10px;
+      padding: 4px 12px;
+    }
+
+    /* --- Mission Select Screen --- */
+    #mission-select {
+      position: fixed;
+      inset: 0;
+      background: #111418;
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 32px;
+    }
+    #mission-select.hidden { display: none; }
+    .mission-select-title {
+      color: #C5CBD3;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      font-family: 'Courier New', monospace;
+    }
+    .mission-select-subtitle {
+      color: #5F6B7C;
+      font-size: 13px;
+      letter-spacing: 1px;
+      margin-top: -20px;
+    }
+    .mission-cards {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 800px;
+    }
+    .mission-card {
+      background: #1C2127;
+      border: 1px solid #383E47;
+      border-radius: 6px;
+      padding: 20px;
+      width: 340px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .mission-card:hover {
+      border-color: #4C90F0;
+      background: #252A31;
+    }
+    .mission-card-name {
+      color: #C5CBD3;
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      font-family: 'Courier New', monospace;
+      letter-spacing: 0.5px;
+    }
+    .mission-card-desc {
+      color: #8F99A8;
+      font-size: 12px;
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+    .mission-card-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #5F6B7C;
+      font-size: 11px;
+    }
+    .mission-card-objectives {
+      color: #4C90F0;
+      font-size: 11px;
+    }
+    .mission-card-launch {
+      background: #2D72D2;
+      color: #fff;
+      border: none;
+      padding: 6px 16px;
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      cursor: pointer;
+      font-family: 'Courier New', monospace;
+    }
+    .mission-card-launch:hover {
+      background: #4C90F0;
+    }
+
+    /* --- Mission Briefing Screen --- */
+    #mission-briefing {
+      position: fixed;
+      inset: 0;
+      background: #111418;
+      z-index: 99;
+      display: none;
+      overflow-y: auto;
+    }
+    #mission-briefing.visible { display: flex; }
+
+    .briefing-layout {
+      display: flex;
+      width: 100%;
+      height: 100%;
+      min-height: 100vh;
+    }
+
+    /* Left: OPORD text */
+    .briefing-text {
+      flex: 1;
+      padding: 32px 40px;
+      overflow-y: auto;
+      max-width: 600px;
+      border-right: 1px solid #383E47;
+    }
+
+    .briefing-title-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+    .briefing-title {
+      color: #C5CBD3;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      font-family: 'Courier New', monospace;
+    }
+    .briefing-classification {
+      color: #E76A6E;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      padding: 2px 8px;
+      border: 1px solid #E76A6E;
+    }
+
+    .opord-section {
+      margin-bottom: 20px;
+    }
+    .opord-section-label {
+      color: #4C90F0;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      margin-bottom: 6px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid #2F343C;
+    }
+    .opord-text {
+      color: #ABB3BF;
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    /* Enemy/Friendly force tables */
+    .force-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    .force-table th {
+      color: #5F6B7C;
+      font-size: 9px;
+      font-weight: 700;
+      text-align: left;
+      padding: 4px 6px;
+      border-bottom: 1px solid #2F343C;
+      letter-spacing: 0.5px;
+    }
+    .force-table td {
+      color: #ABB3BF;
+      padding: 5px 6px;
+      border-bottom: 1px solid #1C2127;
+      vertical-align: top;
+      font-size: 10px;
+    }
+    .force-table tr:hover td { background: rgba(76, 144, 240, 0.04); }
+    .force-count { color: #EC9A3C; font-weight: 600; }
+    .force-type { color: #C5CBD3; font-weight: 500; }
+    .force-cap { color: #8F99A8; font-size: 9px; }
+    .force-notes { color: #5F6B7C; font-size: 9px; font-style: italic; }
+
+    .friendly-type { color: #4C90F0; }
+    .friendly-role { color: #8F99A8; font-size: 9px; }
+
+    /* Unconfirmed reports */
+    .report-item {
+      color: #8F99A8;
+      font-size: 11px;
+      line-height: 1.5;
+      padding: 4px 0 4px 12px;
+      border-left: 2px solid #383E47;
+      margin-bottom: 6px;
+    }
+    .report-item::before {
+      content: 'SIGINT';
+      color: #5F6B7C;
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    /* Right: Intel map + controls */
+    .briefing-map-area {
+      flex: 1.2;
+      display: flex;
+      flex-direction: column;
+      background: #181C20;
+      position: relative;
+    }
+    .briefing-map-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 20px;
+      border-bottom: 1px solid #2F343C;
+    }
+    .briefing-map-title {
+      color: #5F6B7C;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+    }
+    .briefing-map-canvas {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    #briefing-canvas {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Briefing legend */
+    .briefing-legend {
+      display: flex;
+      gap: 16px;
+      padding: 10px 20px;
+      border-top: 1px solid #2F343C;
+      font-size: 9px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      color: #5F6B7C;
+    }
+    .legend-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .legend-dot.confirmed { background: #E76A6E; }
+    .legend-dot.estimated { background: #EC9A3C; border: 1px dashed #EC9A3C; background: transparent; }
+    .legend-dot.corridor { background: #32A467; }
+    .legend-dot.friendly { background: #4C90F0; }
+
+    /* Begin planning button */
+    .briefing-actions {
+      padding: 16px 20px;
+      border-top: 1px solid #383E47;
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+    .briefing-btn {
+      padding: 10px 24px;
+      border: 1px solid #383E47;
+      background: #252A31;
+      color: #8F99A8;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .briefing-btn:hover { background: #2F343C; color: #C5CBD3; }
+    .briefing-btn.primary {
+      background: #2D72D2;
+      border-color: #4C90F0;
+      color: #fff;
+    }
+    .briefing-btn.primary:hover { background: #4C90F0; }
+
+    /* Threat assessment badge */
+    .threat-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      margin-left: 8px;
+    }
+    .threat-badge.moderate { background: #7B5B00; color: #EC9A3C; }
+    .threat-badge.high { background: #6C2022; color: #E76A6E; }
+    .threat-badge.low { background: #1C4A2E; color: #32A467; }
+
+    /* Approach corridors list */
+    .corridor-item {
+      padding: 6px 0;
+      border-bottom: 1px solid #1C2127;
+    }
+    .corridor-item:last-child { border-bottom: none; }
+    .corridor-name {
+      color: #32A467;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .corridor-notes {
+      color: #8F99A8;
+      font-size: 10px;
+      line-height: 1.5;
+      margin-top: 2px;
+    }
+
+    /* --- Live Intel Dashboard (left side, always visible during gameplay) --- */
+    #intel-dashboard {
+      position: absolute;
+      top: 36px;
+      left: 0;
+      width: 300px;
+      height: calc(100vh - 36px);
+      background: #1C2127;
+      border-right: 1px solid #383E47;
+      z-index: 10;
+      pointer-events: auto;
+      font-size: 11px;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #intel-dashboard.visible { display: flex; }
+
+    .intel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      border-bottom: 1px solid #383E47;
+      color: #C5CBD3;
+      font-weight: 600;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    .intel-header button {
+      background: none;
+      border: none;
+      color: #5F6B7C;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+    }
+    .intel-header button:hover { color: #C5CBD3; }
+
+    /* Mission progress section */
+    .intel-section {
+      flex-shrink: 0;
+      border-bottom: 1px solid #2F343C;
+    }
+    .intel-section-header {
+      color: #5F6B7C;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      padding: 6px 12px 4px;
+    }
+    .intel-section-body {
+      padding: 0 12px 8px;
+    }
+
+    /* Objective rows */
+    .intel-obj-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 0;
+      font-size: 10px;
+    }
+    .intel-obj-check {
+      width: 12px;
+      height: 12px;
+      border: 1px solid #383E47;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 8px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .intel-obj-check.done { background: #1C6E42; border-color: #32A467; color: #32A467; }
+    .intel-obj-check.pending { color: #383E47; }
+    .intel-obj-label { color: #ABB3BF; }
+    .intel-obj-label.done { color: #5F6B7C; text-decoration: line-through; }
+
+    /* Stats row */
+    .intel-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 4px;
+      padding: 4px 0;
+    }
+    .intel-stat {
+      text-align: center;
+    }
+    .intel-stat-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: #C5CBD3;
+    }
+    .intel-stat-value.blue { color: #4C90F0; }
+    .intel-stat-value.red { color: #E76A6E; }
+    .intel-stat-value.amber { color: #EC9A3C; }
+    .intel-stat-label {
+      font-size: 8px;
+      color: #5F6B7C;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+
+    /* Event feed (scrollable) */
+    .intel-feed {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+    }
+    .intel-event {
+      padding: 4px 12px;
+      border-bottom: 1px solid #1C2127;
+      display: flex;
+      gap: 8px;
+      font-size: 10px;
+      line-height: 1.4;
+    }
+    .intel-event:hover { background: rgba(76, 144, 240, 0.04); }
+    .intel-event-time {
+      color: #5F6B7C;
+      font-size: 9px;
+      font-weight: 600;
+      flex-shrink: 0;
+      width: 36px;
+    }
+    .intel-event-icon {
+      font-size: 10px;
+      flex-shrink: 0;
+      width: 14px;
+      text-align: center;
+    }
+    .intel-event-icon.detection { color: #4C90F0; }
+    .intel-event-icon.engagement { color: #EC9A3C; }
+    .intel-event-icon.destruction { color: #E76A6E; }
+    .intel-event-icon.mission { color: #32A467; }
+    .intel-event-icon.fuel { color: #EC9A3C; }
+    .intel-event-icon.ammo { color: #8F99A8; }
+    .intel-event-msg { color: #ABB3BF; }
+
+    /* Threat summary */
+    .intel-threat-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 0;
+      font-size: 10px;
+    }
+    .intel-threat-icon {
+      width: 8px;
+      height: 8px;
+      flex-shrink: 0;
+    }
+    .intel-threat-icon.sam {
+      background: #E76A6E;
+      transform: rotate(45deg);
+    }
+    .intel-threat-icon.radar {
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-bottom: 8px solid #EC9A3C;
+      background: none;
+    }
+    .intel-threat-icon.other {
+      background: #8F99A8;
+      border-radius: 50%;
+    }
+    .intel-threat-label {
+      color: #ABB3BF;
+      flex: 1;
+    }
+    .intel-threat-status {
+      font-size: 9px;
+      font-weight: 600;
+    }
+    .intel-threat-status.active { color: #E76A6E; }
+    .intel-threat-status.destroyed { color: #5F6B7C; }
   </style>
 </head>
 <body>
-  <canvas id="game-canvas"></canvas>
+  <!-- Mission Select Screen -->
+  <div id="mission-select">
+    <div class="mission-select-title">NEXUS</div>
+    <div class="mission-select-subtitle">SWARM COMMANDER</div>
+    <div class="mission-cards" id="mission-cards"></div>
+  </div>
+
+  <!-- Mission Briefing Screen -->
+  <div id="mission-briefing">
+    <div class="briefing-layout">
+      <div class="briefing-text" id="briefing-text-content">
+        <!-- Dynamically populated -->
+      </div>
+      <div class="briefing-map-area">
+        <div class="briefing-map-header">
+          <span class="briefing-map-title">INTEL MAP — AREA OF OPERATIONS</span>
+        </div>
+        <div class="briefing-map-canvas">
+          <div id="briefing-map" style="position:absolute;inset:0;z-index:1;"></div>
+          <canvas id="briefing-canvas" style="position:absolute;inset:0;z-index:2;pointer-events:none;"></canvas>
+        </div>
+        <div class="briefing-legend">
+          <div class="legend-item"><span class="legend-dot confirmed"></span> Confirmed Threat</div>
+          <div class="legend-item"><span class="legend-dot estimated"></span> Estimated Position</div>
+          <div class="legend-item"><span class="legend-dot corridor"></span> Approach Corridor</div>
+          <div class="legend-item"><span class="legend-dot friendly"></span> Friendly Asset</div>
+        </div>
+        <div class="briefing-actions">
+          <button class="briefing-btn" id="briefing-back">BACK</button>
+          <button class="briefing-btn primary" id="briefing-begin">BEGIN PLANNING</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="game-container">
+    <div id="map"></div>
+    <canvas id="game-canvas"></canvas>
+  </div>
+
+  <!-- Top bar -->
   <div id="hud">
     <div id="hud-left">
-      <span class="mission-title">NEXUS // FIRST CONTACT</span>
+      <span class="mission-title">NEXUS // OPENING STRIKE</span>
+      <span class="unit-count">
+        <span class="label">BLUE</span> <span class="blue" id="blue-count">8/8</span>
+      </span>
+      <span class="unit-count">
+        <span class="label">INTEL</span> <span class="red" id="red-count">0 CONTACTS</span>
+      </span>
+    </div>
+    <div id="time-controls">
+      <button id="btn-pause" title="Pause (Space)">PAUSE</button>
+      <button id="btn-1x" title="1x (1)">1x</button>
+      <button id="btn-5x" title="5x (2)">5x</button>
+      <button id="btn-20x" title="20x (3)">20x</button>
     </div>
     <div id="hud-right">
-      <span class="clock" id="mission-clock">00:00:00 / 02:00:00</span>
+      <span id="planner-mode-indicator">SET TARGET</span>
+      <button class="hud-btn" id="btn-planner" title="Mission Planner (T)">PLANNER</button>
+      <button class="hud-btn" id="btn-queue" title="Task Queue (Q)">QUEUE</button>
     </div>
   </div>
-  <div id="time-controls">
-    <button id="btn-pause" title="Pause (Space)">|| PAUSE</button>
-    <button id="btn-1x" title="Normal speed (1)">1x</button>
-    <button id="btn-5x" title="Fast (2)">5x</button>
-    <button id="btn-20x" title="Very fast (3)">20x</button>
+
+  <!-- Intel Dashboard (left side, always visible during gameplay) -->
+  <div id="intel-dashboard">
+    <div class="intel-header">
+      <span>INTEL DASHBOARD</span>
+    </div>
+    <div class="intel-section" id="intel-objectives">
+      <!-- Mission progress rendered dynamically -->
+    </div>
+    <div class="intel-section" id="intel-stats">
+      <!-- Force stats rendered dynamically -->
+    </div>
+    <div class="intel-section" id="intel-threats">
+      <!-- Threat summary rendered dynamically -->
+    </div>
+    <div class="intel-section-header" style="border-bottom: none; display: flex; justify-content: space-between; align-items: center;">
+      EVENT FEED
+      <button id="copy-events-btn" title="Copy event log to clipboard" style="
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.15);
+        color: rgba(255,255,255,0.6);
+        font-size: 9px;
+        padding: 2px 6px;
+        cursor: pointer;
+        border-radius: 3px;
+        font-family: inherit;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      ">Copy</button>
+    </div>
+    <div class="intel-feed" id="intel-feed">
+      <!-- Event feed rendered dynamically -->
+    </div>
   </div>
+
+  <!-- Unit info panel (top-left, shows when units selected) -->
+  <div id="unit-info-panel">
+    <div id="unit-info-content"></div>
+  </div>
+
+  <!-- Mission Planner Panel (stepped wizard) -->
+  <div id="planner-panel">
+    <div class="planner-header">
+      <span>MISSION PLANNER</span>
+      <button id="planner-close">&times;</button>
+    </div>
+    <div class="planner-body" id="planner-content">
+      <!-- Dynamically rendered by main.ts -->
+    </div>
+  </div>
+
+  <!-- Queue Panel (compact task queue view) -->
+  <div id="queue-panel">
+    <div class="queue-header">
+      <span>TASK QUEUE</span>
+      <button id="queue-close">&times;</button>
+    </div>
+    <div id="queue-content">
+      <!-- Dynamically rendered by main.ts -->
+    </div>
+  </div>
+
+  <!-- Bottom panel (controls hint) -->
   <div id="status-panel">
-    <div class="mpa-info">
-      <span><span class="label">MPA-1</span> <span class="value" id="mpa-status">Idle</span></span>
-      <span><span class="label">HDG</span> <span class="value" id="mpa-heading">---</span></span>
-      <span><span class="label">SPD</span> <span class="value" id="mpa-speed">--- kts</span></span>
-      <span><span class="label">FUEL</span> <span class="value" id="mpa-fuel">4:00:00</span></span>
-      <span><span class="label">POS</span> <span class="value" id="mpa-position">---.--N ---.--E</span></span>
-    </div>
-    <div>
-      <span class="label">CLICK MAP TO MOVE</span>
+    <div class="controls-hint">
+      LMB Select | Drag Box | RMB Move | Shift+RMB Queue | T Planner | Q Queue | Scroll Zoom | MMB Pan
     </div>
   </div>
+
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

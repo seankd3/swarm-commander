@@ -1,81 +1,157 @@
-import type { Camera } from '../renderer/camera';
-import { panCamera, zoomCamera, screenToWorld } from '../renderer/camera';
-import type { Position } from '../simulation/types';
+// --- Input Handler ---
+// Overlay canvas captures all mouse events.
+// Middle-click + scroll → MapLibre (pan/zoom).
+// Left/right click → game (selection, commands).
+// All callback coordinates are canvas-relative (matching map.project() output).
 
-export interface InputState {
-  camera: Camera;
-  isPanning: boolean;
-  lastMouseX: number;
-  lastMouseY: number;
-  onClick: ((worldPos: Position) => void) | null;
+import { getMap } from '../renderer/map-instance';
+
+/** Callbacks for input events — main.ts handles all game logic */
+export interface InputCallbacks {
+  onLeftClick: (screenX: number, screenY: number, ctrlKey: boolean) => void;
+  onBoxSelect: (startX: number, startY: number, endX: number, endY: number, ctrlKey: boolean) => void;
+  onRightClick: (screenX: number, screenY: number, shiftKey: boolean) => void;
+  onSelectionBoxUpdate: (startX: number, startY: number, endX: number, endY: number) => void;
+  onSelectionBoxClear: () => void;
 }
 
-/** Create input state */
-export function createInputState(camera: Camera): InputState {
+export interface InputState {
+  callbacks: InputCallbacks;
+  isPanning: boolean;
+  isBoxSelecting: boolean;
+  dragStartX: number;
+  dragStartY: number;
+  lastMouseX: number;
+  lastMouseY: number;
+}
+
+const CLICK_THRESHOLD = 5;
+
+export function createInputState(callbacks: InputCallbacks): InputState {
   return {
-    camera,
+    callbacks,
     isPanning: false,
+    isBoxSelecting: false,
+    dragStartX: 0,
+    dragStartY: 0,
     lastMouseX: 0,
     lastMouseY: 0,
-    onClick: null,
   };
 }
 
-/** Bind all input event listeners to the canvas */
+/** Bind all input event listeners to the overlay canvas */
 export function bindInputEvents(
   canvas: HTMLCanvasElement,
   inputState: InputState,
-  getCamera: () => Camera,
-  setCamera: (c: Camera) => void,
 ): void {
-  // Mouse down: start pan (middle/right button) or handle click (left)
+  /** Convert window clientX/Y to canvas-relative coordinates */
+  function toCanvas(clientX: number, clientY: number): [number, number] {
+    const rect = canvas.getBoundingClientRect();
+    return [clientX - rect.left, clientY - rect.top];
+  }
+
+  // Mouse down
   canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 1 || e.button === 2) {
-      // Middle or right click: start panning
+    const [cx, cy] = toCanvas(e.clientX, e.clientY);
+    if (e.button === 1) {
+      // Middle click: start map pan (uses window-relative deltas, not positions)
       inputState.isPanning = true;
       inputState.lastMouseX = e.clientX;
       inputState.lastMouseY = e.clientY;
       e.preventDefault();
     } else if (e.button === 0) {
-      // Left click: record position for potential click
+      // Left click: start potential click or box select
+      inputState.dragStartX = cx;
+      inputState.dragStartY = cy;
+      inputState.lastMouseX = e.clientX;
+      inputState.lastMouseY = e.clientY;
+    } else if (e.button === 2) {
+      // Right click: record for command
       inputState.lastMouseX = e.clientX;
       inputState.lastMouseY = e.clientY;
     }
   });
 
-  // Mouse move: pan if dragging
+  // Mouse move
   canvas.addEventListener('mousemove', (e) => {
     if (inputState.isPanning) {
+      // Panning uses window-relative deltas (unaffected by canvas offset)
       const dx = e.clientX - inputState.lastMouseX;
       const dy = e.clientY - inputState.lastMouseY;
-      setCamera(panCamera(getCamera(), dx, dy));
+      try {
+        const map = getMap();
+        map.panBy([-dx, -dy], { animate: false });
+      } catch {
+        // Map not ready
+      }
       inputState.lastMouseX = e.clientX;
       inputState.lastMouseY = e.clientY;
-    }
-  });
-
-  // Mouse up: stop panning or trigger click
-  canvas.addEventListener('mouseup', (e) => {
-    if (e.button === 1 || e.button === 2) {
-      inputState.isPanning = false;
-    } else if (e.button === 0) {
-      // Left click: if mouse didn't move much, treat as click
-      const dx = Math.abs(e.clientX - inputState.lastMouseX);
-      const dy = Math.abs(e.clientY - inputState.lastMouseY);
-      if (dx < 5 && dy < 5 && inputState.onClick) {
-        const worldPos = screenToWorld(getCamera(), e.clientX, e.clientY);
-        inputState.onClick(worldPos);
+    } else if (e.buttons === 1) {
+      // Left button held — check if dragging far enough for box select
+      const [cx, cy] = toCanvas(e.clientX, e.clientY);
+      const dx = Math.abs(cx - inputState.dragStartX);
+      const dy = Math.abs(cy - inputState.dragStartY);
+      if (dx > CLICK_THRESHOLD || dy > CLICK_THRESHOLD) {
+        inputState.isBoxSelecting = true;
+        inputState.callbacks.onSelectionBoxUpdate(
+          inputState.dragStartX, inputState.dragStartY,
+          cx, cy,
+        );
       }
     }
   });
 
-  // Scroll: zoom
+  // Mouse up
+  canvas.addEventListener('mouseup', (e) => {
+    const [cx, cy] = toCanvas(e.clientX, e.clientY);
+    if (e.button === 1) {
+      inputState.isPanning = false;
+    } else if (e.button === 0) {
+      if (inputState.isBoxSelecting) {
+        // Finish box select
+        inputState.callbacks.onBoxSelect(
+          inputState.dragStartX, inputState.dragStartY,
+          cx, cy,
+          e.ctrlKey || e.metaKey,
+        );
+        inputState.callbacks.onSelectionBoxClear();
+        inputState.isBoxSelecting = false;
+      } else {
+        // Single click
+        inputState.callbacks.onLeftClick(cx, cy, e.ctrlKey || e.metaKey);
+      }
+    } else if (e.button === 2) {
+      // Right click: issue command if didn't drag
+      const dx = Math.abs(e.clientX - inputState.lastMouseX);
+      const dy = Math.abs(e.clientY - inputState.lastMouseY);
+      if (dx < CLICK_THRESHOLD && dy < CLICK_THRESHOLD) {
+        inputState.callbacks.onRightClick(cx, cy, e.shiftKey);
+      }
+    }
+  });
+
+  // Scroll: forward zoom to MapLibre
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const zoomIn = e.deltaY < 0;
-    setCamera(zoomCamera(getCamera(), e.clientX, e.clientY, zoomIn));
+    try {
+      const map = getMap();
+      const container = map.getCanvasContainer();
+      // Clone and dispatch to MapLibre's canvas container where scrollZoom listens
+      container.dispatchEvent(new WheelEvent('wheel', {
+        deltaX: e.deltaX,
+        deltaY: e.deltaY,
+        deltaMode: e.deltaMode,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        screenX: e.screenX,
+        screenY: e.screenY,
+        bubbles: true,
+      }));
+    } catch {
+      // Map not ready
+    }
   }, { passive: false });
 
-  // Prevent context menu on right-click
+  // Prevent context menu
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 }

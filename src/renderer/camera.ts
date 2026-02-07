@@ -1,76 +1,95 @@
+// --- Camera Adapter ---
+// Bridges the game's Camera interface to MapLibre GL JS.
+// All downstream code continues to use worldToScreen/screenToWorld unchanged.
+
 import type { Position } from '../simulation/types';
-import { PLAY_AREA } from '../simulation/types';
+import { getMap, hasMap } from './map-instance';
 
 /** Camera state — controls what portion of the world is visible */
 export interface Camera {
   // Center of the viewport in lat/lon
   centerLat: number;
   centerLon: number;
-  // Zoom level: pixels per degree of longitude
+  // Zoom level: pixels per degree of longitude (derived from MapLibre)
   zoom: number;
   // Viewport size in pixels
   viewportWidth: number;
   viewportHeight: number;
 }
 
-const MIN_ZOOM = 100; // zoomed out
-const MAX_ZOOM = 20000; // zoomed in
-const ZOOM_FACTOR = 1.15;
+/** Sync Camera snapshot from current MapLibre map state. Called once per frame. */
+export function syncCamera(viewportWidth: number, viewportHeight: number): Camera {
+  const map = getMap();
+  const center = map.getCenter();
 
-/** Create initial camera centered on play area */
+  // Derive pixels-per-degree by projecting two points 1° apart
+  const p1 = map.project([center.lng, center.lat]);
+  const p2 = map.project([center.lng + 1, center.lat]);
+  const pixelsPerDegree = Math.abs(p2.x - p1.x);
+
+  return {
+    centerLat: center.lat,
+    centerLon: center.lng,
+    zoom: pixelsPerDegree,
+    viewportWidth,
+    viewportHeight,
+  };
+}
+
+/** Create initial camera — requires map to be initialized */
 export function createCamera(viewportWidth: number, viewportHeight: number): Camera {
-  const centerLat = (PLAY_AREA.north + PLAY_AREA.south) / 2;
-  const centerLon = (PLAY_AREA.east + PLAY_AREA.west) / 2;
-
-  // Fit the play area horizontally with some padding
-  const lonSpan = PLAY_AREA.east - PLAY_AREA.west;
-  const zoom = (viewportWidth * 0.8) / lonSpan;
-
-  return { centerLat, centerLon, zoom, viewportWidth, viewportHeight };
+  if (!hasMap()) {
+    // Fallback for pre-map state (mission select screen)
+    return {
+      centerLat: 0,
+      centerLon: 0,
+      zoom: 1000,
+      viewportWidth,
+      viewportHeight,
+    };
+  }
+  return syncCamera(viewportWidth, viewportHeight);
 }
 
 /** Convert a world lat/lon to screen pixel coordinates */
 export function worldToScreen(camera: Camera, pos: Position): { x: number; y: number } {
-  // Equirectangular projection: x = lon, y = -lat (screen y is inverted)
-  const x = (pos.lon - camera.centerLon) * camera.zoom + camera.viewportWidth / 2;
-  const y = (camera.centerLat - pos.lat) * camera.zoom + camera.viewportHeight / 2;
-  return { x, y };
+  if (!hasMap()) {
+    // Fallback equirectangular projection when map not ready
+    const x = (pos.lon - camera.centerLon) * camera.zoom + camera.viewportWidth / 2;
+    const y = (camera.centerLat - pos.lat) * camera.zoom + camera.viewportHeight / 2;
+    return { x, y };
+  }
+  const map = getMap();
+  const point = map.project([pos.lon, pos.lat]);
+  return { x: point.x, y: point.y };
 }
 
-/** Convert screen pixel coordinates to world lat/lon */
-export function screenToWorld(camera: Camera, screenX: number, screenY: number): Position {
-  const lon = (screenX - camera.viewportWidth / 2) / camera.zoom + camera.centerLon;
-  const lat = camera.centerLat - (screenY - camera.viewportHeight / 2) / camera.zoom;
-  return { lat, lon };
+/** Convert screen pixel coordinates to world lat/lon.
+ * Expects canvas-relative coordinates (matching map.project() output). */
+export function screenToWorld(_camera: Camera, screenX: number, screenY: number): Position {
+  if (!hasMap()) {
+    return { lat: 0, lon: 0 };
+  }
+  const map = getMap();
+  const lngLat = map.unproject([screenX, screenY]);
+  return { lat: lngLat.lat, lon: lngLat.lng };
 }
 
-/** Pan the camera by screen pixel delta */
-export function panCamera(camera: Camera, dx: number, dy: number): Camera {
-  return {
-    ...camera,
-    centerLon: camera.centerLon - dx / camera.zoom,
-    centerLat: camera.centerLat + dy / camera.zoom,
-  };
+/** Pan the camera by screen pixel delta — no-op, MapLibre handles pan */
+export function panCamera(camera: Camera, _dx: number, _dy: number): Camera {
+  return camera;
 }
 
-/** Zoom the camera around a screen point */
-export function zoomCamera(camera: Camera, screenX: number, screenY: number, zoomIn: boolean): Camera {
-  const factor = zoomIn ? ZOOM_FACTOR : 1 / ZOOM_FACTOR;
-  const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, camera.zoom * factor));
-
-  // Zoom toward the mouse position
-  const worldBefore = screenToWorld(camera, screenX, screenY);
-  const updatedCamera = { ...camera, zoom: newZoom };
-  const worldAfter = screenToWorld(updatedCamera, screenX, screenY);
-
-  return {
-    ...updatedCamera,
-    centerLon: updatedCamera.centerLon + (worldBefore.lon - worldAfter.lon),
-    centerLat: updatedCamera.centerLat + (worldBefore.lat - worldAfter.lat),
-  };
+/** Zoom the camera around a screen point — no-op, MapLibre handles zoom */
+export function zoomCamera(camera: Camera, _screenX: number, _screenY: number, _zoomIn: boolean): Camera {
+  return camera;
 }
 
 /** Resize the camera viewport */
 export function resizeCamera(camera: Camera, width: number, height: number): Camera {
+  if (hasMap()) {
+    getMap().resize();
+    return syncCamera(width, height);
+  }
   return { ...camera, viewportWidth: width, viewportHeight: height };
 }
